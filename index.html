@@ -20,8 +20,11 @@
             transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
         }
         .video-wrapper { position: relative; width: 100%; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.2); background: #000; aspect-ratio: 4/3; margin-bottom: 12px; }
-        video#webcam { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-        canvas#landmarks { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); z-index: 10; }
+        /* 修改点：隐藏摄像头画面 */
+        video#webcam { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0; z-index: 5; }
+        /* 修改点：画布背景设为黑色，显示在顶层 */
+        canvas#landmarks { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); z-index: 10; background: #000; }
+        
         #realtime-emotion {
             background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2);
             color: white; padding: 12px; border-radius: 8px; font-weight: 300; font-size: 14px; margin-bottom: 12px; transition: all 0.5s; line-height: 1.5;
@@ -95,44 +98,26 @@
                     void main() {
                         vec2 original_uv = (vUv - 0.5) * 2.0; float original_r = length(original_uv); 
                         vec2 uv = original_uv * u_zoom;
-
-                        // 【视觉解封 1：Thump 心跳感】找回微笑时的轻微震动
                         float thump = 1.0 - u_smile * 0.03 * sin(u_time * 5.0); uv *= thump;
-
                         float r = length(uv); float a = atan(uv.y, uv.x); a += u_seed * 0.1;
                         float slice = PI * 2.0 / u_petals; a = mod(a, slice); a = abs(a - slice / 2.0);
                         vec2 p = r * vec2(cos(a), sin(a)); 
-                        
-                        // 【视觉解封 2：大绽放缩放】解封被缩小的 scale 权重，找回繁花绽放感
                         float scale = 3.5 - u_smile * 1.8; p *= scale;
-                        
                         vec2 flow = p;
-                        // 降噪处理，减少循环次数，增加平滑度
                         for(float i = 1.0; i < 20.0; i++) {
                             float speedFactor = 0.6 + i * 0.03;
-                            // 流动速度随微笑略微增加，但保持优雅
                             float t = u_time * (1.0 + u_smile * 0.3);
                             flow.x += 0.3 / i * sin(i * (u_distortion + 4.0 + sin(u_time * 0.1)) * flow.y + t * speedFactor + u_seed * i);
                             flow.y += 0.3 / i * cos(i * (u_distortion + cos(u_time * 1.0)) * flow.x + t * speedFactor + u_seed * i);
-                            // 增加轻微旋转流转
                             float angle = u_time * 0.01 * u_smile; flow = mat2(cos(angle), -sin(angle), sin(angle), cos(angle)) * flow;
                         }
-                        
                         float pattern = cos(flow.x * 5.0 + flow.y * 5.0);
-                        // 【视觉解封 3：Thickness 线条增粗】
                         float thickness = mix(u_thickness, u_thickness * 1.6, u_smile);
-                        float glow = thickness / abs(pattern + 0.006); // 减小噪点边界
-                        
-                        // 【视觉解封 4：琉璃 Spectrum】强烈找回微笑时的彩色琉璃光
+                        float glow = thickness / abs(pattern + 0.006); 
                         vec3 liuliSpectrum = 0.5 + 0.5 * cos(u_time * 0.4 + r * 3.0 + flow.x * 0.2 + vec3(0.0, 1.0, 2.0));
                         vec3 finalColor = mix(u_color, liuliSpectrum, u_smile * 0.85);
-                        
-                        // 【视觉解封 5：Glow 爆发】大幅增加微笑时的光亮度
                         vec3 col = finalColor * glow * (2.2 + u_smile * 3.0) + vec3(1.0) * pow(glow, 2.0) * 0.6 * u_smile;
-                        
-                        // 沉浸式边缘羽化
                         col *= smoothstep(mix(1.5, 0.6, (u_zoom - 1.0)/2.5), mix(1.5, 0.6, (u_zoom - 1.0)/2.5) - 0.2, original_r); 
-                        
                         gl_FragColor = vec4(col, 1.0);
                     }
                 `;
@@ -144,28 +129,20 @@
                 if (!this.isAnimating) return;
                 const delta = (dt / 1000);
                 this.uniforms.u_time.value += delta * this.timeScale;
-               
-                // 微笑数值平滑插值（找回原版灵敏度）
                 const currentSmile = this.uniforms.u_smile.value;
                 this.uniforms.u_smile.value += (this.targetSmile - currentSmile) * delta * (this.targetSmile > currentSmile ? 1.5 : 0.6);
-                
-                // 【保留缓慢放大，优化噪点】
-                // 当微笑触发时，u_zoom 极缓慢减小，不再需要 Math.pow 这种剧烈的数学降噪，靠 Shader 自身平滑
                 if (this.targetSmile > 0.5) {
-                    this.currentZoom -= delta * 0.035; // 速度调慢，更深邃
+                    this.currentZoom -= delta * 0.035; 
                 } else {
-                    this.currentZoom += (2.2 - this.currentZoom) * delta * 0.3; // 缓慢恢复
+                    this.currentZoom += (2.2 - this.currentZoom) * delta * 0.3; 
                 }
-                this.uniforms.u_zoom.value = Math.max(0.7, this.currentZoom); // 设置合理的放大极限
-
-                // 其他参数插值
+                this.uniforms.u_zoom.value = Math.max(0.7, this.currentZoom);
                 this.uniforms.u_color.value.lerp(this.targetColor, delta * 1.5);
                 this.uniforms.u_thickness.value += (this.targetThickness - this.uniforms.u_thickness.value) * delta * 1.5;
                 this.uniforms.u_distortion.value += (this.targetDistortion - this.uniforms.u_distortion.value) * delta * 1.5;
             }
         });
 
-        // --- 以下逻辑保持原样，仅做叙事调整 ---
         const plutchikMap = {
             happy: { color: '#E3B448', petals: 16, thickness: 0.025, distortion: 1.0, name: '喜悅' }, 
             sad: { color: '#2A5CAA', petals: 8,  thickness: 0.006, distortion: 0.4, name: '悲傷' }, 
@@ -205,7 +182,12 @@
                 video.srcObject = stream;
                 await new Promise((resolve) => { video.onloadedmetadata = () => { video.play().then(resolve); }; });
                 const URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
-                await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(URL), faceapi.nets.faceExpressionNet.loadFromUri(URL), faceapi.nets.faceLandmark68Net.loadFromUri(URL)]);
+                /* 修改点：确保加载了 landmark 模型 */
+                await Promise.all([
+                    faceapi.nets.tinyFaceDetector.loadFromUri(URL), 
+                    faceapi.nets.faceExpressionNet.loadFromUri(URL), 
+                    faceapi.nets.faceLandmark68Net.loadFromUri(URL)
+                ]);
                 const displaySize = { width: video.videoWidth, height: video.videoHeight };
                 faceapi.matchDimensions(canvas, displaySize);
                 startPhase1(displaySize);
@@ -220,13 +202,36 @@
 
             async function captureLoop() {
                 if(!isCapturing) return;
-                const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceExpressions();
+                /* 修改点：请求 Landmarks 数据 */
+                const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+                                    .withFaceLandmarks()
+                                    .withFaceExpressions();
+                
+                const ctx = canvas.getContext('2d'); 
+                ctx.clearRect(0, 0, canvas.width, canvas.height); 
+
                 if(det) {
+                    const resizedDet = faceapi.resizeResults(det, displaySize);
                     const topEmo = Object.keys(det.expressions).reduce((a,b)=>det.expressions[a]>det.expressions[b]?a:b);
-                    collectedSamples.push(topEmo);
-                    emotionText.innerText = `正在凝結心境: ${plutchikMap[topEmo]?.name || '...'}`;
+                    const emoData = plutchikMap[topEmo] || plutchikMap.neutral;
+                    
+                    /* 修改点：绘制骨骼点 */
+                    faceapi.draw.drawFaceLandmarks(canvas, resizedDet, { 
+                        drawLines: true, 
+                        color: emoData.color, 
+                        lineWidth: 1 
+                    });
+                    
+                    if (count <= 3) {
+                        emotionText.innerText = `正在凝結心境: ${emoData.name}`; 
+                        emotionText.style.color = emoData.color;
+                        collectedSamples.push(topEmo); 
+                    } else {
+                        emotionText.innerText = `正在識別情緒: ${emoData.name}`; 
+                        emotionText.style.color = "#ffffff";
+                    }
                 }
-                setTimeout(captureLoop, 150);
+                if(isCapturing) setTimeout(captureLoop, 60); 
             }
             captureLoop();
 
@@ -251,14 +256,11 @@
                 comp.targetColor.set(data.color); comp.uniforms.u_petals.value = data.petals; comp.targetThickness = data.thickness; comp.targetDistortion = data.distortion;
             }
             bgmCapture.pause(); bgmTotem.play().catch(e => console.log(e));
-
-            // 【字幕叙事调整】定格之后提示，不干扰后续界面
             setTimeout(() => {
                 subtitleBox.innerText = "「 您可以選擇保存您的情緒狀態或開始微笑之境 」";
                 subtitleBox.style.opacity = 1;
-                setTimeout(() => { subtitleBox.style.opacity = 0; }, 5000); // 维持5秒
+                setTimeout(() => { subtitleBox.style.opacity = 0; }, 5000); 
             }, 2500);
-
             document.getElementById('action-panel').style.display = 'flex';
         }
 
@@ -273,21 +275,31 @@
 
         async function interactionLoop() {
             if(!isInteracting) return;
-            const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceExpressions();
+            /* 修改点：这里也加上 Landmarks 请求与绘制，保证交互阶段也能看到骨骼点 */
+            const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+                                .withFaceLandmarks()
+                                .withFaceExpressions();
             const comp = galaxy.components['hd-kaleidoscope-sky'];
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
             if (det) {
+                const resizedDet = faceapi.resizeResults(det, { width: video.videoWidth, height: video.videoHeight });
+                const topEmo = Object.keys(det.expressions).reduce((a,b)=>det.expressions[a]>det.expressions[b]?a:b);
+                const emoData = plutchikMap[topEmo] || plutchikMap.neutral;
+
+                faceapi.draw.drawFaceLandmarks(canvas, resizedDet, { 
+                    drawLines: true, 
+                    color: emoData.color, 
+                    lineWidth: 1 
+                });
+
                 const rawSmile = det.expressions.happy; 
-                // 丝滑蓄力
                 if (rawSmile > 0.5) {
-                    // 每次循环增加的数值。
-                   // 增大这个值（如 0.04 -> 0.08），图形绽放速度会翻倍
                     bufferedSmileTracker = Math.min(1.0, bufferedSmileTracker + 0.04);
                 } else {
-                    // 每次循环减少的数值。
-                   // 增大这个值（如 0.02 -> 0.05），笑容消失后图形收缩回位的速度会变快
                     bufferedSmileTracker = Math.max(0.0, bufferedSmileTracker - 0.01);
                 }
-
                 if (bufferedSmileTracker > 0.35) {
                     if (uiState !== 'smile') {
                         emotionText.innerHTML = `鏡像變換中...`; emotionText.style.color = "#E3B448";
@@ -302,7 +314,7 @@
                 }
             }
             if(comp) comp.targetSmile = bufferedSmileTracker;
-            setTimeout(interactionLoop, 100);
+            setTimeout(interactionLoop, 60);
         }
 
         document.getElementById('btn-reset').onclick = () => location.reload();
