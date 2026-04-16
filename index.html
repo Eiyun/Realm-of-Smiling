@@ -20,9 +20,7 @@
             transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
         }
         .video-wrapper { position: relative; width: 100%; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.2); background: #000; aspect-ratio: 4/3; margin-bottom: 12px; }
-        /* 修改点：隐藏摄像头画面 */
         video#webcam { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0; z-index: 5; }
-        /* 修改点：画布背景设为黑色，显示在顶层 */
         canvas#landmarks { position: absolute; top: 0; left: 0; width: 100%; height: 100%; transform: scaleX(-1); z-index: 10; background: #000; }
         
         #realtime-emotion {
@@ -78,22 +76,37 @@
     <script>
         AFRAME.registerComponent('hd-kaleidoscope-sky', {
             init: function () {
-                this.targetColor = new THREE.Color(0x9CBB89);
+                this.targetColor = new THREE.Color('#FFEB3B');
+                this.targetFeedbackColor = new THREE.Color('#FF8A65'); // 新增：治愈色目标值
                 this.targetThickness = 0.012;  
                 this.targetDistortion = 1.2;  
                 this.currentZoom = 2.2; 
                 
                 this.uniforms = {
-                    u_time: { value: 0.0 }, u_color: { value: new THREE.Color(0x9CBB89) },
-                    u_smile: { value: 0.0 }, u_zoom: { value: 2.2 }, 
-                    u_petals: { value: 14.0 }, u_seed: { value: Math.random() * 100.0 },
-                    u_thickness: { value: 0.012 }, u_distortion: { value: 1.2 }
+                    u_time: { value: 0.0 }, 
+                    u_color: { value: new THREE.Color('#FFEB3B') },
+                    u_feedback_color: { value: new THREE.Color('#FF8A65') }, // 新增：传给Shader的治愈色
+                    u_smile: { value: 0.0 }, 
+                    u_zoom: { value: 2.2 }, 
+                    u_petals: { value: 14.0 }, 
+                    u_seed: { value: Math.random() * 100.0 },
+                    u_thickness: { value: 0.012 }, 
+                    u_distortion: { value: 1.2 }
                 };
 
                 const vertexShader = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
                 const fragmentShader = `
-                    varying vec2 vUv; uniform float u_time; uniform vec3 u_color; uniform float u_smile;
-                    uniform float u_zoom; uniform float u_petals; uniform float u_seed; uniform float u_thickness; uniform float u_distortion;
+                    varying vec2 vUv; 
+                    uniform float u_time; 
+                    uniform vec3 u_color; 
+                    uniform vec3 u_feedback_color; // 接收治愈色
+                    uniform float u_smile;
+                    uniform float u_zoom; 
+                    uniform float u_petals; 
+                    uniform float u_seed; 
+                    uniform float u_thickness; 
+                    uniform float u_distortion;
+                    
                     #define PI 3.14159265359
                     void main() {
                         vec2 original_uv = (vUv - 0.5) * 2.0; float original_r = length(original_uv); 
@@ -104,6 +117,7 @@
                         vec2 p = r * vec2(cos(a), sin(a)); 
                         float scale = 3.5 - u_smile * 1.8; p *= scale;
                         vec2 flow = p;
+                        
                         for(float i = 1.0; i < 20.0; i++) {
                             float speedFactor = 0.6 + i * 0.03;
                             float t = u_time * (1.0 + u_smile * 0.3);
@@ -111,13 +125,22 @@
                             flow.y += 0.3 / i * cos(i * (u_distortion + cos(u_time * 1.0)) * flow.x + t * speedFactor + u_seed * i);
                             float angle = u_time * 0.01 * u_smile; flow = mat2(cos(angle), -sin(angle), sin(angle), cos(angle)) * flow;
                         }
+                        
                         float pattern = cos(flow.x * 5.0 + flow.y * 5.0);
                         float thickness = mix(u_thickness, u_thickness * 1.6, u_smile);
                         float glow = thickness / abs(pattern + 0.006); 
+                        
+                        // 【色彩重构】：从情绪底色平滑过渡到治愈反馈色
+                        vec3 baseMix = mix(u_color, u_feedback_color, u_smile * 0.9);
+                        
+                        // 保留一丝琉璃质感，避免色彩过于单调
                         vec3 liuliSpectrum = 0.5 + 0.5 * cos(u_time * 0.4 + r * 3.0 + flow.x * 0.2 + vec3(0.0, 1.0, 2.0));
-                        vec3 finalColor = mix(u_color, liuliSpectrum, u_smile * 0.85);
+                        vec3 finalColor = mix(baseMix, liuliSpectrum, u_smile * 0.2); 
+                        
+                        // 高光与曝光处理
                         vec3 col = finalColor * glow * (2.2 + u_smile * 3.0) + vec3(1.0) * pow(glow, 2.0) * 0.6 * u_smile;
                         col *= smoothstep(mix(1.5, 0.6, (u_zoom - 1.0)/2.5), mix(1.5, 0.6, (u_zoom - 1.0)/2.5) - 0.2, original_r); 
+                        
                         gl_FragColor = vec4(col, 1.0);
                     }
                 `;
@@ -131,27 +154,36 @@
                 this.uniforms.u_time.value += delta * this.timeScale;
                 const currentSmile = this.uniforms.u_smile.value;
                 this.uniforms.u_smile.value += (this.targetSmile - currentSmile) * delta * (this.targetSmile > currentSmile ? 1.5 : 0.6);
+                
                 if (this.targetSmile > 0.5) {
                     this.currentZoom -= delta * 0.035; 
                 } else {
                     this.currentZoom += (2.2 - this.currentZoom) * delta * 0.3; 
                 }
                 this.uniforms.u_zoom.value = Math.max(0.7, this.currentZoom);
+                
+                // 平滑插值颜色
                 this.uniforms.u_color.value.lerp(this.targetColor, delta * 1.5);
+                this.uniforms.u_feedback_color.value.lerp(this.targetFeedbackColor, delta * 1.5); // 更新治愈色
+                
                 this.uniforms.u_thickness.value += (this.targetThickness - this.uniforms.u_thickness.value) * delta * 1.5;
                 this.uniforms.u_distortion.value += (this.targetDistortion - this.uniforms.u_distortion.value) * delta * 1.5;
             }
         });
 
+        // ==========================================
+        // 色彩映射表：普拉奇克底色 + 微笑疗愈反馈色
+        // ==========================================
         const plutchikMap = {
-            happy: { color: '#E3B448', petals: 16, thickness: 0.025, distortion: 1.0, name: '喜悅' }, 
-            sad: { color: '#2A5CAA', petals: 8,  thickness: 0.006, distortion: 0.4, name: '悲傷' }, 
-            angry: { color: '#FF461F', petals: 24, thickness: 0.015, distortion: 3.5, name: '憤怒' }, 
-            fearful: { color: '#1D6953', petals: 10, thickness: 0.005, distortion: 4.5, name: '恐懼' }, 
-            surprised: { color: '#4CB4E7', petals: 18, thickness: 0.018, distortion: 2.0, name: '驚奇' }, 
-            disgusted: { color: '#6B4C9A', petals: 12, thickness: 0.012, distortion: 2.5, name: '厭惡' }, 
-            neutral: { color: '#9CBB89', petals: 14, thickness: 0.012, distortion: 1.2, name: '平靜' }  
+            happy: { color: '#FFEB3B', feedback: '#FF8A65', petals: 16, thickness: 0.025, distortion: 1.0, name: '喜悅' }, // 黄 -> 蜜桃橘
+            sad: { color: '#3F51B5', feedback: '#FFF59D', petals: 8,  thickness: 0.006, distortion: 0.4, name: '悲傷' }, // 蓝 -> 浅黄
+            angry: { color: '#F44336', feedback: '#81D4FA', petals: 24, thickness: 0.015, distortion: 3.5, name: '憤怒' }, // 红 -> 浅蓝
+            fearful: { color: '#4CAF50', feedback: '#F48FB1', petals: 10, thickness: 0.005, distortion: 4.5, name: '恐懼' }, // 绿 -> 樱花粉
+            surprised: { color: '#03A9F4', feedback: '#B2DFDB', petals: 18, thickness: 0.018, distortion: 2.0, name: '驚奇' }, // 浅蓝 -> 薄荷绿
+            disgusted: { color: '#9C27B0', feedback: '#E1BEE7', petals: 12, thickness: 0.012, distortion: 2.5, name: '厭惡' }, // 紫 -> 丁香紫
+            neutral: { color: '#B0BEC5', feedback: '#FFD54F', petals: 14, thickness: 0.012, distortion: 1.2, name: '平靜' }  // 灰蓝 -> 明黄
         };
+        // ==========================================
 
         const startBtn = document.getElementById('center-start');
         const uiLayer = document.getElementById('ui-layer');
@@ -182,7 +214,6 @@
                 video.srcObject = stream;
                 await new Promise((resolve) => { video.onloadedmetadata = () => { video.play().then(resolve); }; });
                 const URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
-                /* 修改点：确保加载了 landmark 模型 */
                 await Promise.all([
                     faceapi.nets.tinyFaceDetector.loadFromUri(URL), 
                     faceapi.nets.faceExpressionNet.loadFromUri(URL), 
@@ -202,7 +233,6 @@
 
             async function captureLoop() {
                 if(!isCapturing) return;
-                /* 修改点：请求 Landmarks 数据 */
                 const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
                                     .withFaceLandmarks()
                                     .withFaceExpressions();
@@ -215,7 +245,6 @@
                     const topEmo = Object.keys(det.expressions).reduce((a,b)=>det.expressions[a]>det.expressions[b]?a:b);
                     const emoData = plutchikMap[topEmo] || plutchikMap.neutral;
                     
-                    /* 修改点：绘制骨骼点 */
                     faceapi.draw.drawFaceLandmarks(canvas, resizedDet, { 
                         drawLines: true, 
                         color: emoData.color, 
@@ -253,7 +282,12 @@
             emotionText.innerHTML = `基调：<span style="color:${data.color}">${data.name}</span><span class="sub-desc">專屬圖騰已凝結</span>`;
             const comp = galaxy.components['hd-kaleidoscope-sky'];
             if(comp) {
-                comp.targetColor.set(data.color); comp.uniforms.u_petals.value = data.petals; comp.targetThickness = data.thickness; comp.targetDistortion = data.distortion;
+                // 在这里设置底色和治愈色目标值
+                comp.targetColor.set(data.color); 
+                comp.targetFeedbackColor.set(data.feedback); 
+                comp.uniforms.u_petals.value = data.petals; 
+                comp.targetThickness = data.thickness; 
+                comp.targetDistortion = data.distortion;
             }
             bgmCapture.pause(); bgmTotem.play().catch(e => console.log(e));
             setTimeout(() => {
@@ -275,7 +309,6 @@
 
         async function interactionLoop() {
             if(!isInteracting) return;
-            /* 修改点：这里也加上 Landmarks 请求与绘制，保证交互阶段也能看到骨骼点 */
             const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
                                 .withFaceLandmarks()
                                 .withFaceExpressions();
